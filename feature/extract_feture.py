@@ -7,22 +7,23 @@ import xgboost as xgb
 from add_feture import *
 FEATURE_EXTRACTION_SLOT = 10
 LabelDay = datetime.datetime(2014,12,18,0,0,0)
+# 预测时间为12月19日 LabelDay为前一天
 Data = pd.read_csv("../DataSet/drop1112_sub_item.csv")
 Data['daystime'] = Data['days'].map(lambda x: time.strptime(x, "%Y-%m-%d")).map(lambda x: datetime.datetime(*x[:6]))
+# 对从time字段分割出来的days字段进行类型转换，转换成日期格式，方便后面滑窗计算
 
-
-def get_train(train_user,end_time):
+def get_train(train_user, end_time):  # Data labelDay
     # 取出label day 前一天的记录作为打标记录
     data_train = train_user[(train_user['daystime'] == (end_time-datetime.timedelta(days=1)))]#&((train_user.behavior_type==3)|(train_user.behavior_type==2))
     # 训练样本中，删除重复的样本
     data_train = data_train.drop_duplicates(['user_id', 'item_id'])
-    data_train_ui = data_train['user_id'] / data_train['item_id']
+    data_train_ui = data_train['user_id'] / data_train['item_id']  # 数值相同即为同一个用户对同一个物品的行为
 #    print(len(data_train))
 
     # 使用label day 的实际购买情况进行打标
-    data_label = train_user[train_user['daystime'] == end_time]
-    data_label_buy = data_label[data_label['behavior_type'] == 4]
-    data_label_buy_ui = data_label_buy['user_id'] / data_label_buy['item_id']
+    data_label = train_user[train_user['daystime'] == end_time]    # 取出Data中的当天的数据  第一天66534
+    data_label_buy = data_label[data_label['behavior_type'] == 4]  # 找出购买了的人  第一天781
+    data_label_buy_ui = data_label_buy['user_id'] / data_label_buy['item_id']  # 计算出一个ui值
 
     # 对前一天的交互记录进行打标
     data_train_labeled = data_train_ui.isin(data_label_buy_ui)
@@ -30,7 +31,7 @@ def get_train(train_user,end_time):
     data_train_labeled = data_train_labeled.map(dict)
 
     data_train['label'] = data_train_labeled
-    return data_train[['user_id', 'item_id','item_category', 'label']]
+    return data_train[['user_id', 'item_id', 'item_category', 'label']]
 
 def get_label_testset(train_user,LabelDay):
     # 测试集选为上一天所有的交互数据
@@ -166,37 +167,54 @@ def item_id_feture(data,end_time,beforeoneday):
     item_id_feture.fillna(0,inplace=True)
     return item_id_feture
 
-
-def user_id_feture(data,end_time,beforeoneday):   
+# Data labelDay beforeoneday
+def user_id_feture(data, end_time, beforeoneday):
     # data = Data[(Data['daystime']<LabelDay) & (Data['daystime']>LabelDay-datetime.timedelta(days=FEATURE_EXTRACTION_SLOT))]
-    user_count = pd.crosstab(data.user_id,data.behavior_type)
-    user_count_before5=None
-    if (((end_time-datetime.timedelta(days=5))<datetime.datetime(2014,12,13,0,0,0))&((end_time-datetime.timedelta(days=5))>datetime.datetime(2014,12,10,0,0,0))):
-        beforefiveday = data[data['daystime']>=end_time-datetime.timedelta(days=5+2)]
-        user_count_before5 = pd.crosstab(beforefiveday.user_id,beforefiveday.behavior_type)
-    else:
-        beforefiveday = data[data['daystime']>=end_time-datetime.timedelta(days=5)]
-        user_count_before5 = pd.crosstab(beforefiveday.user_id,beforefiveday.behavior_type)
+    # 所有天用户行为计数
+    user_count = pd.crosstab(data.user_id, data.behavior_type)
+    # 获取3,5,7天内用户不同行为的次数
+    # 如果五天内数据有落在11号和12号的 则往前推两天
+    def beforeNdays(N):
+        if (((end_time - datetime.timedelta(days=N)) < datetime.datetime(2014, 12, 13, 0, 0, 0)) & (
+                (end_time - datetime.timedelta(days=N)) > datetime.datetime(2014, 12, 10, 0, 0, 0))):
+            beforeNday = data[data['daystime'] >= end_time - datetime.timedelta(days=N + 2)]
+            user_count_beforeN = pd.crosstab(beforeNday.user_id, beforeNday.behavior_type)
+        else:
+            beforeNday = data[data['daystime'] >= end_time - datetime.timedelta(days=N)]
+            user_count_beforeN = pd.crosstab(beforeNday.user_id, beforeNday.behavior_type)
+        return user_count_beforeN
 
-    user_count_before_3=None
-    if (((end_time-datetime.timedelta(days=5))<datetime.datetime(2014,12,13,0,0,0))&((end_time-datetime.timedelta(days=5))>datetime.datetime(2014,12,10,0,0,0))):
-        beforethreeday = data[data['daystime']>=end_time-datetime.timedelta(days=3+2)]
-        user_count_before_3 = pd.crosstab(beforethreeday.user_id,beforethreeday.behavior_type)
-    else:
-        beforethreeday = data[data['daystime']>=end_time-datetime.timedelta(days=3)]
-        user_count_before_3 = pd.crosstab(beforethreeday.user_id,beforethreeday.behavior_type)
+    user_count_before3 = beforeNdays(3)
+    user_count_before5 = beforeNdays(5)
+    user_count_before7 = beforeNdays(7)
 
-    user_count_before_2=None
-    if (((end_time-datetime.timedelta(days=5))<datetime.datetime(2014,12,13,0,0,0))&((end_time-datetime.timedelta(days=5))>datetime.datetime(2014,12,10,0,0,0))):
-        beforethreeday = data[data['daystime']>=end_time-datetime.timedelta(days=7+2)]
-        user_count_before_2 = pd.crosstab(beforethreeday.user_id,beforethreeday.behavior_type)
-    else:
-        beforethreeday = data[data['daystime']>=end_time-datetime.timedelta(days=7)]
-        user_count_before_2 = pd.crosstab(beforethreeday.user_id,beforethreeday.behavior_type)
+    # if (((end_time-datetime.timedelta(days=5))<datetime.datetime(2014,12,13,0,0,0))&((end_time-datetime.timedelta(days=5))>datetime.datetime(2014,12,10,0,0,0))):
+    #     beforefiveday = data[data['daystime']>=end_time-datetime.timedelta(days=5+2)]
+    #     user_count_before5 = pd.crosstab(beforefiveday.user_id, beforefiveday.behavior_type)
+    # else:
+    #     beforefiveday = data[data['daystime']>=end_time-datetime.timedelta(days=5)]
+    #     user_count_before5 = pd.crosstab(beforefiveday.user_id, beforefiveday.behavior_type)
+    #
+    # user_count_before_3=None
+    # if (((end_time-datetime.timedelta(days=5))<datetime.datetime(2014,12,13,0,0,0))&((end_time-datetime.timedelta(days=5))>datetime.datetime(2014,12,10,0,0,0))):
+    #     beforethreeday = data[data['daystime']>=end_time-datetime.timedelta(days=3+2)]
+    #     user_count_before_3 = pd.crosstab(beforethreeday.user_id,beforethreeday.behavior_type)
+    # else:
+    #     beforethreeday = data[data['daystime']>=end_time-datetime.timedelta(days=3)]
+    #     user_count_before_3 = pd.crosstab(beforethreeday.user_id,beforethreeday.behavior_type)
+    #
+    # user_count_before_2=None
+    # if (((end_time-datetime.timedelta(days=5))<datetime.datetime(2014,12,13,0,0,0))&((end_time-datetime.timedelta(days=5))>datetime.datetime(2014,12,10,0,0,0))):
+    #     beforethreeday = data[data['daystime']>=end_time-datetime.timedelta(days=7+2)]
+    #     user_count_before_2 = pd.crosstab(beforethreeday.user_id,beforethreeday.behavior_type)
+    # else:
+    #     beforethreeday = data[data['daystime']>=end_time-datetime.timedelta(days=7)]
+    #     user_count_before_2 = pd.crosstab(beforethreeday.user_id,beforethreeday.behavior_type)
         
     # beforeoneday = Data[Data['daystime'] == LabelDay-datetime.timedelta(days=1)]
-    beforeonedayuser_count = pd.crosstab(beforeoneday.user_id,beforeoneday.behavior_type)
+    beforeonedayuser_count = pd.crosstab(beforeoneday.user_id, beforeoneday.behavior_type)
     countAverage = user_count/FEATURE_EXTRACTION_SLOT
+
     buyRate = pd.DataFrame()
     buyRate['click'] = user_count[1]/user_count[4]
     buyRate['skim'] = user_count[2]/user_count[4]
@@ -210,13 +228,13 @@ def user_id_feture(data,end_time,beforeoneday):
     buyRate_2.index = user_count_before5.index
 
     buyRate_3 = pd.DataFrame()
-    buyRate_3['click'] = user_count_before_3[1]/user_count_before_3[4]
-    buyRate_3['skim'] = user_count_before_3[2]/user_count_before_3[4]
-    buyRate_3['collect'] = user_count_before_3[3]/user_count_before_3[4]
-    buyRate_3.index = user_count_before_3.index
+    buyRate_3['click'] = user_count_before3[1]/user_count_before3[4]
+    buyRate_3['skim'] = user_count_before3[2]/user_count_before3[4]
+    buyRate_3['collect'] = user_count_before3[3]/user_count_before3[4]
+    buyRate_3.index = user_count_before3.index
 
 
-    buyRate = buyRate.replace([np.inf, -np.inf], 0)
+    buyRate = buyRate.replace([np.inf, -np.inf], 0)  # ??
     buyRate_2 = buyRate_2.replace([np.inf, -np.inf], 0)
     buyRate_3 = buyRate_3.replace([np.inf, -np.inf], 0)
 
@@ -227,8 +245,8 @@ def user_id_feture(data,end_time,beforeoneday):
     user_id_feture = pd.merge(user_id_feture,countAverage,how='left',right_index=True,left_index=True)
     user_id_feture = pd.merge(user_id_feture,buyRate,how='left',right_index=True,left_index=True)
     user_id_feture = pd.merge(user_id_feture,user_count_before5,how='left',right_index=True,left_index=True)
-    user_id_feture = pd.merge(user_id_feture,user_count_before_3,how='left',right_index=True,left_index=True)
-    user_id_feture = pd.merge(user_id_feture,user_count_before_2,how='left',right_index=True,left_index=True)
+    user_id_feture = pd.merge(user_id_feture,user_count_before3,how='left',right_index=True,left_index=True)
+    user_id_feture = pd.merge(user_id_feture,user_count_before7,how='left',right_index=True,left_index=True)
     user_id_feture = pd.merge(user_id_feture,long_online,how='left',right_index=True,left_index=True)
 #    user_id_feture = pd.merge(user_id_feture,buyRate_2,how='left',right_index=True,left_index=True)
 #    user_id_feture = pd.merge(user_id_feture,buyRate_3,how='left',right_index=True,left_index=True)
@@ -322,13 +340,13 @@ def user_cate_feture(data,end_time,beforeoneday):
     user_cate_feture = pd.merge(user_cate_feture,user_cate_count_5,how='left',right_index=True,left_index=True)
     user_cate_feture = pd.merge(user_cate_feture,user_cate_count_3,how='left',right_index=True,left_index=True)
     user_cate_feture = pd.merge(user_cate_feture,user_cate_count_2,how='left',right_index=True,left_index=True)
-    user_cate_feture.fillna(0,inplace=True)
+    user_cate_feture.fillna(0, inplace=True)
     return user_cate_feture
 
 
 if __name__ == '__main__':
 #    pass
-    result=[]
+    result = []
     for i in range(15):
         train_user_window1 = None
         if (LabelDay >= datetime.datetime(2014,12,12,0,0,0)):
@@ -336,10 +354,11 @@ if __name__ == '__main__':
         else:
             train_user_window1 = Data[(Data['daystime'] > (LabelDay - datetime.timedelta(days=FEATURE_EXTRACTION_SLOT))) & (Data['daystime'] < LabelDay)]
 #        train_user_window1 = Data[(Data['daystime'] > (LabelDay - datetime.timedelta(days=FEATURE_EXTRACTION_SLOT))) & (Data['daystime'] < LabelDay)]
-        beforeoneday = Data[Data['daystime'] == (LabelDay-datetime.timedelta(days=1))]
+        beforeoneday = Data[Data['daystime'] == (LabelDay-datetime.timedelta(days=1))] # 往前推一天
         # beforetwoday = Data[(Data['daystime'] >= (LabelDay-datetime.timedelta(days=2))) & (Data['daystime'] < LabelDay)]
         # beforefiveday = Data[(Data['daystime'] >= (LabelDay-datetime.timedelta(days=5))) & (Data['daystime'] < LabelDay)]
         x = get_train(Data, LabelDay)
+        # 用户的操作行为分布在每个小时的数据
         add_user_click_1 = user_click(beforeoneday)
         add_user_item_click_1 = user_item_click(beforeoneday)
         add_user_cate_click_1 = user_cate_click(beforeoneday)
@@ -347,41 +366,41 @@ if __name__ == '__main__':
         # add_user_click_5 = user_click(beforefiveday)
         liveday = user_liveday(train_user_window1)
         # sys.exit()
-        a = user_id_feture(train_user_window1, LabelDay,beforeoneday)
+        a = user_id_feture(train_user_window1, LabelDay, beforeoneday)
         a = a.reset_index()
-        b = item_id_feture(train_user_window1, LabelDay,beforeoneday)
+        b = item_id_feture(train_user_window1, LabelDay, beforeoneday)
         b = b.reset_index()
-        c = item_category_feture(train_user_window1, LabelDay,beforeoneday)
+        c = item_category_feture(train_user_window1, LabelDay, beforeoneday)
         c = c.reset_index()
-        d = user_cate_feture(train_user_window1, LabelDay,beforeoneday)
+        d = user_cate_feture(train_user_window1, LabelDay, beforeoneday)
         d = d.reset_index()
-        e = user_item_feture(train_user_window1, LabelDay,beforeoneday)
+        e = user_item_feture(train_user_window1, LabelDay, beforeoneday)
         e = e.reset_index()
-        x = pd.merge(x,a,on=['user_id'],how='left')
-        x = pd.merge(x,b,on=['item_id'],how='left')
-        x = pd.merge(x,c,on=['item_category'],how='left')
-        x = pd.merge(x,d,on=['user_id','item_category'],how='left')
-        x = pd.merge(x,e,on=['user_id','item_id'],how='left')
-        x = pd.merge(x,add_user_click_1,left_on = ['user_id'],right_index=True,how = 'left' )
-        # x = pd.merge(x,add_user_click_2,left_on = ['user_id'],right_index=True,how = 'left' )
-        # x = pd.merge(x,add_user_click_5,left_on = ['user_id'],right_index=True,how = 'left' )
-        x = pd.merge(x,add_user_item_click_1,left_on = ['user_id','item_id'],right_index=True,how = 'left' )
-        x = pd.merge(x,add_user_cate_click_1,left_on = ['user_id','item_category'],right_index=True,how = 'left' )
-        x = pd.merge(x,liveday,left_on = ['user_id'],right_index=True,how = 'left' )
+        x = pd.merge(x, a, on=['user_id'], how='left')
+        x = pd.merge(x, b, on=['item_id'], how='left')
+        x = pd.merge(x, c, on=['item_category'], how='left')
+        x = pd.merge(x, d, on=['user_id', 'item_category'], how='left')
+        x = pd.merge(x, e, on=['user_id', 'item_id'], how='left')
+        x = pd.merge(x, add_user_click_1, left_on=['user_id'], right_index=True, how='left' )
+        # x = pd.merge(x, add_user_click_2, left_on=['user_id'], right_index=True,how='left' )
+        # x = pd.merge(x, add_user_click_5, left_on=['user_id'], right_index=True,how='left' )
+        x = pd.merge(x, add_user_item_click_1, left_on=['user_id','item_id'], right_index=True, how='left' )
+        x = pd.merge(x, add_user_cate_click_1, left_on=['user_id','item_category'], right_index=True, how='left' )
+        x = pd.merge(x, liveday, left_on=['user_id'], right_index=True, how='left' )
         x = x.fillna(0)
-        print(i,LabelDay,len(x))
+        print(i, LabelDay, len(x))
         LabelDay = LabelDay-datetime.timedelta(days=1)
-        if (LabelDay == datetime.datetime(2014,12,13,0,0,0)):
-            LabelDay = datetime.datetime(2014,12,10,0,0,0)
+        if (LabelDay == datetime.datetime(2014, 12, 13, 0, 0, 0)):
+            LabelDay = datetime.datetime(2014, 12, 10, 0, 0, 0)
         result.append(x)
-    train_set = pd.concat(result,axis=0,ignore_index=True)
+    train_set = pd.concat(result, axis=0, ignore_index=True)
 #    train_set.to_csv('train_train_no_jiagou.csv',index=None)
     ###############################################
     
-    LabelDay=datetime.datetime(2014,12,18,0,0,0)
-    test = get_label_testset(Data,LabelDay)
+    LabelDay = datetime.datetime(2014, 12, 18, 0, 0, 0)
+    test = get_label_testset(Data, LabelDay)
 
-    train_user_window1 =  Data[(Data['daystime'] > (LabelDay - datetime.timedelta(days=FEATURE_EXTRACTION_SLOT-1))) & (Data['daystime'] <= LabelDay)]
+    train_user_window1 = Data[(Data['daystime'] > (LabelDay - datetime.timedelta(days=FEATURE_EXTRACTION_SLOT-1))) & (Data['daystime'] <= LabelDay)]
     beforeoneday = Data[Data['daystime'] == LabelDay]
     # beforetwoday = Data[(Data['daystime'] >= (LabelDay-datetime.timedelta(days=2))) & (Data['daystime'] < LabelDay)]
     # beforefiveday = Data[(Data['daystime'] >= (LabelDay-datetime.timedelta(days=5))) & (Data['daystime'] < LabelDay)]
@@ -391,46 +410,46 @@ if __name__ == '__main__':
     # add_user_click_2 = user_click(beforetwoday)
     # add_user_click_5 = user_click(beforefiveday)
     liveday = user_liveday(train_user_window1)
-    a = user_id_feture(train_user_window1, LabelDay,beforeoneday)
+    a = user_id_feture(train_user_window1, LabelDay, beforeoneday)
     a = a.reset_index()
-    b = item_id_feture(train_user_window1, LabelDay,beforeoneday)
+    b = item_id_feture(train_user_window1, LabelDay, beforeoneday)
     b = b.reset_index()
-    c = item_category_feture(train_user_window1, LabelDay,beforeoneday)
+    c = item_category_feture(train_user_window1, LabelDay, beforeoneday)
     c = c.reset_index()
-    d = user_cate_feture(train_user_window1, LabelDay,beforeoneday)
+    d = user_cate_feture(train_user_window1, LabelDay, beforeoneday)
     d = d.reset_index()
-    e = user_item_feture(train_user_window1, LabelDay,beforeoneday)
+    e = user_item_feture(train_user_window1, LabelDay, beforeoneday)
     e = e.reset_index()
-    test = pd.merge(test,a,on=['user_id'],how='left')
-    test = pd.merge(test,b,on=['item_id'],how='left')
-    test = pd.merge(test,c,on=['item_category'],how='left')
-    test = pd.merge(test,d,on=['user_id','item_category'],how='left')
-    test = pd.merge(test,e,on=['user_id','item_id'],how='left')
-    test = pd.merge(test,add_user_click,left_on = ['user_id'],right_index=True,how = 'left' )
+    test = pd.merge(test, a, on=['user_id'], how='left')
+    test = pd.merge(test, b, on=['item_id'], how='left')
+    test = pd.merge(test, c, on=['item_category'], how='left')
+    test = pd.merge(test, d, on=['user_id', 'item_category'], how='left')
+    test = pd.merge(test, e, on=['user_id', 'item_id'], how='left')
+    test = pd.merge(test, add_user_click, left_on=['user_id'], right_index=True, how='left' )
     # test = pd.merge(test,add_user_click_2,left_on = ['user_id'],right_index=True,how = 'left' )
     # test = pd.merge(test,add_user_click_5,left_on = ['user_id'],right_index=True,how = 'left' )
-    test = pd.merge(test,add_user_item_click,left_on = ['user_id','item_id'],right_index=True,how = 'left' )
-    test = pd.merge(test,add_user_cate_click,left_on = ['user_id','item_category'],right_index=True,how = 'left' )
-    test = pd.merge(test,liveday,left_on = ['user_id'],right_index=True,how = 'left' )
+    test = pd.merge(test, add_user_item_click, left_on=['user_id', 'item_id'], right_index=True, how='left')
+    test = pd.merge(test, add_user_cate_click, left_on=['user_id', 'item_category'], right_index=True, how='left')
+    test = pd.merge(test, liveday, left_on=['user_id'], right_index=True, how='left' )
     test = test.fillna(0)
 #    test.to_csv('test_test_no_jiagou.csv',index=None)
 #
 #    sys.exit()
 
     ###############采样
-    train_set_1 = train_set[train_set['label']==1]
-    train_set_0 = train_set[train_set['label']==0]
+    train_set_1 = train_set[train_set['label'] == 1]
+    train_set_0 = train_set[train_set['label'] == 0]
     new_train_set_0 = train_set_0.sample(len(train_set_1)*90)
-    train_set = pd.concat([train_set_1,new_train_set_0],axis=0)
+    train_set = pd.concat([train_set_1, new_train_set_0], axis=0)
     ###############
     train_y = train_set['label'].values
-    train_x = train_set.drop(['user_id', 'item_id','item_category', 'label'], axis=1).values
-    test_x = test.drop(['user_id', 'item_id','item_category'], axis=1).values   
+    train_x = train_set.drop(['user_id', 'item_id', 'item_category', 'label'], axis=1).values
+    test_x = test.drop(['user_id', 'item_id', 'item_category'], axis=1).values
     num_round = 900
     params = {'max_depth': 4, 'colsample_bytree': 0.8, 'subsample': 0.8, 'eta': 0.02, 'silent': 1,
-              'objective': 'binary:logistic','eval_metric ':'error', 'min_child_weight': 2.5,#'max_delta_step':10,'gamma':0.1,'scale_pos_weight':230/1,
+              'objective': 'binary:logistic', 'eval_metric ':'error', 'min_child_weight': 2.5,#'max_delta_step':10,'gamma':0.1,'scale_pos_weight':230/1,
                'seed': 10}  #
-    plst = list(params.items())
+    plst = list(params.items())  # 转成二元组
     dtrain = xgb.DMatrix(train_x, label=train_y)
     dtest = xgb.DMatrix(test_x)
     bst = xgb.train(plst, dtrain, num_round)
@@ -439,14 +458,14 @@ if __name__ == '__main__':
 
     predicted_proba = pd.DataFrame(predicted_proba)
     predicted = pd.concat([test[['user_id', 'item_id']], predicted_proba], axis=1)
-    predicted.columns = ['user_id','item_id','prob']
+    predicted.columns = ['user_id', 'item_id', 'prob']
     #print(predicted)
-    predicted = predicted.sort_values('prob',  axis=0,ascending=False)
+    predicted = predicted.sort_values('prob',  axis=0, ascending=False)
     #print(predicted)
 #    predict1 = predicted.iloc[:650, [0, 1]]
 #    # 保存到文件
 #    predict1.to_csv("../result/10_30_2/650_1B80minchildweight1.8.csv", index=False)
-    
+
     predict2 = predicted.iloc[:700, [0, 1]]
     # 保存到文件
     predict2.to_csv("../result/result.csv", index=False)
@@ -460,14 +479,14 @@ if __name__ == '__main__':
 
 
 
-    #####################################################################线下验证部分
+    ###########################   线下验证部分  ##############################
     reference = Data[Data['daystime'] == (LabelDay+datetime.timedelta(days=1))]
     reference = reference[reference['behavior_type'] == 4]  # 购买的记录
     reference = reference[['user_id', 'item_id']]  # 获取ui对
     reference = reference.drop_duplicates(['user_id', 'item_id'])  # 去重
     ui = predicted['user_id'] / predicted['item_id']
 
-    predicted=predicted[ui.duplicated() == False]
+    predicted = predicted[ui.duplicated() == False]
 
     predicted_ui = predicted['user_id'] / predicted['item_id']
     reference_ui = reference['user_id'] / reference['item_id']
